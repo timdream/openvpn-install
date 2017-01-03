@@ -196,6 +196,10 @@ else
 	echo "listening to."
 	[[ $HAS_BACKUP != '1' ]] && read -p "IP address: " -e -i $IP IP || echo "IP address: $IP"
 	echo ""
+	echo "What's the IP/hostname the client should connect to?"
+	echo "If you are using a hostname you are responsible of set up the (dynamic) DNS correctly."
+	[[ -z $SERVER_HOSTNAME ]] && read -p "Server hostname: " -e -i $IP SERVER_HOSTNAME || echo "Server hostname: $SERVER_HOSTNAME"
+	echo ""
 	echo "What port do you want for OpenVPN?"
 	[[ -z $PORT ]] && read -p "Port: " -e -i 1194 PORT || echo "Port: $PORT"
 	echo ""
@@ -387,14 +391,15 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 	# openvpn-install.conf is used to rebuild the server with the same pki and options.
 	# IP is purposely not saved because the restored server would have a new IP address.
 	echo "PORT=$PORT
-DNS=$DNS" > /etc/openvpn/openvpn-install.conf
+DNS=$DNS
+SERVER_HOSTNAME=$SERVER_HOSTNAME" > /etc/openvpn/openvpn-install.conf
 	# client-common.txt is created so we have a template to add further users later
 	echo "client
 dev tun
 proto udp
 sndbuf 0
 rcvbuf 0
-remote $IP $PORT
+remote $SERVER_HOSTNAME $PORT
 resolv-retry infinite
 nobind
 persist-key

@@ -7,6 +7,10 @@
 # your Debian/Ubuntu/CentOS box. It has been designed to be as unobtrusive and
 # universal as possible.
 
+# If the first argument is a directory, this script will try to restore
+# the original OpenVPN configurations and authentication credentials.
+# Backup the /etc/openvpn directory to save them.
+OVPN_INSTALL_BACKUP_DIR=$1
 
 # Detect Debian users running the script with "sh" instead of bash
 if readlink /proc/$$/exe | grep -qs "dash"; then
@@ -173,16 +177,27 @@ else
 	clear
 	echo 'Welcome to this quick OpenVPN "road warrior" installer'
 	echo ""
+
+	HAS_BACKUP=
+	if ([[ -d "$OVPN_INSTALL_BACKUP_DIR" ]] && [[ -f "$OVPN_INSTALL_BACKUP_DIR"/openvpn-install.conf ]]); then
+		echo "I will attempt to restore openvpn configuration stored in"
+		echo "$OVPN_INSTALL_BACKUP_DIR, as you've asked me to."
+		echo ""
+
+		source $OVPN_INSTALL_BACKUP_DIR/openvpn-install.conf
+		HAS_BACKUP=1
+	fi
+
 	# OpenVPN setup and first user creation
 	echo "I need to ask you a few questions before starting the setup"
 	echo "You can leave the default options and just press enter if you are ok with them"
 	echo ""
 	echo "First I need to know the IPv4 address of the network interface you want OpenVPN"
 	echo "listening to."
-	read -p "IP address: " -e -i $IP IP
+	[[ $HAS_BACKUP != '1' ]] && read -p "IP address: " -e -i $IP IP || echo "IP address: $IP"
 	echo ""
 	echo "What port do you want for OpenVPN?"
-	read -p "Port: " -e -i 1194 PORT
+	[[ -z $PORT ]] && read -p "Port: " -e -i 1194 PORT || echo "Port: $PORT"
 	echo ""
 	echo "What DNS do you want to use with the VPN?"
 	echo "   1) Current system resolvers"
@@ -191,14 +206,16 @@ else
 	echo "   4) NTT"
 	echo "   5) Hurricane Electric"
 	echo "   6) Verisign"
-	read -p "DNS [1-6]: " -e -i 1 DNS
-	echo ""
-	echo "Finally, tell me your name for the client cert"
-	echo "Please, use one word only, no special characters"
-	read -p "Client name: " -e -i client CLIENT
+	[[ -z $DNS ]] && read -p "DNS [1-6]: " -e -i 1 DNS || echo "DNS: $DNS"
+	if [[ $HAS_BACKUP != '1' ]]; then
+		echo ""
+		echo "Finally, tell me your name for the client cert"
+		echo "Please, use one word only, no special characters"
+		read -p "Client name: " -e -i client CLIENT
+	fi
 	echo ""
 	echo "Okay, that was all I needed. We are ready to setup your OpenVPN server now"
-	read -n1 -r -p "Press any key to continue..."
+	[[ $HAS_BACKUP = '1' ]] || read -n1 -r -p "Press any key to continue..."
 		if [[ "$OS" = 'debian' ]]; then
 		apt-get update
 		apt-get install openvpn iptables openssl ca-certificates -y
@@ -219,19 +236,29 @@ else
 	chown -R root:root /etc/openvpn/easy-rsa/
 	rm -rf ~/EasyRSA-3.0.1.tgz
 	cd /etc/openvpn/easy-rsa/
-	# Create the PKI, set up the CA, the DH params and the server + client certificates
-	./easyrsa init-pki
-	./easyrsa --batch build-ca nopass
-	./easyrsa gen-dh
-	./easyrsa build-server-full server nopass
-	./easyrsa build-client-full $CLIENT nopass
-	./easyrsa gen-crl
+	if [[ -d "$OVPN_INSTALL_BACKUP_DIR/easy-rsa/pki" ]]; then
+		cp -r "$OVPN_INSTALL_BACKUP_DIR/easy-rsa/pki" /etc/openvpn/easy-rsa/
+		chown -R root:$GROUPNAME /etc/openvpn/easy-rsa/pki
+	else
+		# Create the PKI, set up the CA, the DH params and the server + client certificates
+		./easyrsa init-pki
+		./easyrsa --batch build-ca nopass
+		./easyrsa gen-dh
+		./easyrsa build-server-full server nopass
+		./easyrsa build-client-full $CLIENT nopass
+		./easyrsa gen-crl
+	fi
 	# Move the stuff we need
 	cp pki/ca.crt pki/private/ca.key pki/dh.pem pki/issued/server.crt pki/private/server.key /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn
 	# CRL is read with each client connection, when OpenVPN is dropped to nobody
 	chown nobody:$GROUPNAME /etc/openvpn/crl.pem
-	# Generate key for tls-auth
-	openvpn --genkey --secret /etc/openvpn/ta.key
+	if [[ -f "$OVPN_INSTALL_BACKUP_DIR/ta.key" ]]; then
+		cp "$OVPN_INSTALL_BACKUP_DIR/ta.key" /etc/openvpn/ta.key
+		chown root:$GROUPNAME /etc/openvpn/ta.key
+	else
+		# Generate key for tls-auth
+		openvpn --genkey --secret /etc/openvpn/ta.key
+	fi
 	# Generate server.conf
 	echo "port $PORT
 proto udp
@@ -357,6 +384,10 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 			IP=$USEREXTERNALIP
 		fi
 	fi
+	# openvpn-install.conf is used to rebuild the server with the same pki and options.
+	# IP is purposely not saved because the restored server would have a new IP address.
+	echo "PORT=$PORT
+DNS=$DNS" > /etc/openvpn/openvpn-install.conf
 	# client-common.txt is created so we have a template to add further users later
 	echo "client
 dev tun
@@ -374,11 +405,16 @@ comp-lzo
 setenv opt block-outside-dns
 key-direction 1
 verb 3" > /etc/openvpn/client-common.txt
-	# Generates the custom client.ovpn
-	newclient "$CLIENT"
 	echo ""
 	echo "Finished!"
-	echo ""
-	echo "Your client configuration is available at" ~/"$CLIENT.ovpn"
-	echo "If you want to add more clients, you simply need to run this script another time!"
+	if [[ $HAS_BACKUP = '1' ]]; then
+		echo ""
+		echo "Your server has been restored from the backup directory."
+	else
+		# Generates the custom client.ovpn
+		newclient "$CLIENT"
+		echo ""
+		echo "Your client configuration is available at" ~/"$CLIENT.ovpn"
+		echo "If you want to add more clients, you simply need to run this script another time!"
+	fi
 fi

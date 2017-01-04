@@ -7,10 +7,11 @@
 # your Debian/Ubuntu/CentOS box. It has been designed to be as unobtrusive and
 # universal as possible.
 
-# If the first argument is a directory, this script will try to restore
-# the original OpenVPN configurations and authentication credentials.
+# If the first argument is a directory, this script will try to
+# restore/reconstruct the original OpenVPN configurations and authentication
+# credentials.
 # Backup the /etc/openvpn directory to save them.
-OVPN_INSTALL_BACKUP_DIR=$1
+OVPN_INSTALL_CONFIG_DIR=$1
 
 # Detect Debian users running the script with "sh" instead of bash
 if readlink /proc/$$/exe | grep -qs "dash"; then
@@ -135,23 +136,34 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 			read -p "Do you really want to remove OpenVPN? [y/n]: " -e -i n REMOVE
 			if [[ "$REMOVE" = 'y' ]]; then
 				PORT=$(grep '^port ' /etc/openvpn/server.conf | cut -d " " -f 2)
+				[[ -f /etc/openvpn/server-tcp.conf ]] && PORT_TCP=$(grep '^port ' /etc/openvpn/server-tcp.conf | cut -d " " -f 2)
 				if pgrep firewalld; then
 					# Using both permanent and not permanent rules to avoid a firewalld reload.
 					firewall-cmd --zone=public --remove-port=$PORT/udp
 					firewall-cmd --zone=trusted --remove-source=10.8.0.0/24
+					[[ ! -z "$PORT_TCP" ]] && firewall-cmd --zone=public --remove-port=$PORT_TCP/tcp
+					[[ ! -z "$PORT_TCP" ]] && firewall-cmd --zone=trusted --remove-source=10.9.0.0/24
 					firewall-cmd --permanent --zone=public --remove-port=$PORT/udp
 					firewall-cmd --permanent --zone=trusted --remove-source=10.8.0.0/24
+					[[ ! -z "$PORT_TCP" ]] && firewall-cmd --permanent --zone=public --remove-port=$PORT_TCP/tcp
+					[[ ! -z "$PORT_TCP" ]] && firewall-cmd --permanent --zone=trusted --remove-source=10.9.0.0/24
 				fi
 				if iptables -L -n | grep -qE 'REJECT|DROP'; then
 					sed -i "/iptables -I INPUT -p udp --dport $PORT -j ACCEPT/d" $RCLOCAL
 					sed -i "/iptables -I FORWARD -s 10.8.0.0\/24 -j ACCEPT/d" $RCLOCAL
+					[[ ! -z "$PORT_TCP" ]] && sed -i "/iptables -I INPUT -p udp --dport $PORT_TCP -j ACCEPT/d" $RCLOCAL
+					[[ ! -z "$PORT_TCP" ]] && sed -i "/iptables -I FORWARD -s 10.9.0.0\/24 -j ACCEPT/d" $RCLOCAL
 					sed -i "/iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT/d" $RCLOCAL
 				fi
 				sed -i '/iptables -t nat -A POSTROUTING -s 10.8.0.0\/24 -j SNAT --to /d' $RCLOCAL
+				[[ ! -z "$PORT_TCP" ]] && sed -i '/iptables -t nat -A POSTROUTING -s 10.9.0.0\/24 -j SNAT --to /d' $RCLOCAL
 				if hash sestatus 2>/dev/null; then
 					if sestatus | grep "Current mode" | grep -qs "enforcing"; then
 						if [[ "$PORT" != '1194' ]]; then
 							semanage port -d -t openvpn_port_t -p udp $PORT
+						fi
+						if [[ ! -z "$PORT_TCP" ]]; then
+							semanage port -d -t openvpn_port_t -p tcp $PORT_TCP
 						fi
 					fi
 				fi
@@ -178,14 +190,14 @@ else
 	echo 'Welcome to this quick OpenVPN "road warrior" installer'
 	echo ""
 
-	HAS_BACKUP=
-	if ([[ -d "$OVPN_INSTALL_BACKUP_DIR" ]] && [[ -f "$OVPN_INSTALL_BACKUP_DIR"/openvpn-install.conf ]]); then
+	HAS_CONFIG_DIR=
+	if ([[ -d "$OVPN_INSTALL_CONFIG_DIR" ]] && [[ -f "$OVPN_INSTALL_CONFIG_DIR"/openvpn-install.conf ]]); then
 		echo "I will attempt to restore openvpn configuration stored in"
-		echo "$OVPN_INSTALL_BACKUP_DIR, as you've asked me to."
+		echo "$OVPN_INSTALL_CONFIG_DIR, as you've asked me to."
 		echo ""
 
-		source $OVPN_INSTALL_BACKUP_DIR/openvpn-install.conf
-		HAS_BACKUP=1
+		source $OVPN_INSTALL_CONFIG_DIR/openvpn-install.conf
+		HAS_CONFIG_DIR=1
 	fi
 
 	# OpenVPN setup and first user creation
@@ -194,14 +206,17 @@ else
 	echo ""
 	echo "First I need to know the IPv4 address of the network interface you want OpenVPN"
 	echo "listening to."
-	[[ $HAS_BACKUP != '1' ]] && read -p "IP address: " -e -i $IP IP || echo "IP address: $IP"
+	[[ $HAS_CONFIG_DIR != '1' ]] && read -p "IP address: " -e -i $IP IP || echo "IP address: $IP"
 	echo ""
 	echo "What's the IP/hostname the client should connect to?"
 	echo "If you are using a hostname you are responsible of set up the (dynamic) DNS correctly."
 	[[ -z $SERVER_HOSTNAME ]] && read -p "Server hostname: " -e -i $IP SERVER_HOSTNAME || echo "Server hostname: $SERVER_HOSTNAME"
 	echo ""
-	echo "What port do you want for OpenVPN?"
+	echo "What port do you want for OpenVPN (UDP)?"
 	[[ -z $PORT ]] && read -p "Port: " -e -i 1194 PORT || echo "Port: $PORT"
+	echo ""
+	echo "What port do you want for OpenVPN (TCP)?"
+	([[ -z $PORT_TCP ]] && [[ $HAS_CONFIG_DIR != '1' ]]) && read -p "Port: " -e -i 443 PORT_TCP || echo "Port: $PORT_TCP"
 	echo ""
 	echo "What DNS do you want to use with the VPN?"
 	echo "   1) Current system resolvers"
@@ -211,7 +226,7 @@ else
 	echo "   5) Hurricane Electric"
 	echo "   6) Verisign"
 	[[ -z $DNS ]] && read -p "DNS [1-6]: " -e -i 1 DNS || echo "DNS: $DNS"
-	if [[ $HAS_BACKUP != '1' ]]; then
+	if [[ $HAS_CONFIG_DIR != '1' ]]; then
 		echo ""
 		echo "Finally, tell me your name for the client cert"
 		echo "Please, use one word only, no special characters"
@@ -219,7 +234,7 @@ else
 	fi
 	echo ""
 	echo "Okay, that was all I needed. We are ready to setup your OpenVPN server now"
-	[[ $HAS_BACKUP = '1' ]] || read -n1 -r -p "Press any key to continue..."
+	[[ $HAS_CONFIG_DIR = '1' ]] || read -n1 -r -p "Press any key to continue..."
 		if [[ "$OS" = 'debian' ]]; then
 		apt-get update
 		apt-get install openvpn iptables openssl ca-certificates -y
@@ -240,8 +255,8 @@ else
 	chown -R root:root /etc/openvpn/easy-rsa/
 	rm -rf ~/EasyRSA-3.0.1.tgz
 	cd /etc/openvpn/easy-rsa/
-	if [[ -d "$OVPN_INSTALL_BACKUP_DIR/easy-rsa/pki" ]]; then
-		cp -r "$OVPN_INSTALL_BACKUP_DIR/easy-rsa/pki" /etc/openvpn/easy-rsa/
+	if [[ -d "$OVPN_INSTALL_CONFIG_DIR/easy-rsa/pki" ]]; then
+		cp -r "$OVPN_INSTALL_CONFIG_DIR/easy-rsa/pki" /etc/openvpn/easy-rsa/
 		chown -R root:$GROUPNAME /etc/openvpn/easy-rsa/pki
 	else
 		# Create the PKI, set up the CA, the DH params and the server + client certificates
@@ -256,16 +271,15 @@ else
 	cp pki/ca.crt pki/private/ca.key pki/dh.pem pki/issued/server.crt pki/private/server.key /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn
 	# CRL is read with each client connection, when OpenVPN is dropped to nobody
 	chown nobody:$GROUPNAME /etc/openvpn/crl.pem
-	if [[ -f "$OVPN_INSTALL_BACKUP_DIR/ta.key" ]]; then
-		cp "$OVPN_INSTALL_BACKUP_DIR/ta.key" /etc/openvpn/ta.key
+	if [[ -f "$OVPN_INSTALL_CONFIG_DIR/ta.key" ]]; then
+		cp "$OVPN_INSTALL_CONFIG_DIR/ta.key" /etc/openvpn/ta.key
 		chown root:$GROUPNAME /etc/openvpn/ta.key
 	else
 		# Generate key for tls-auth
 		openvpn --genkey --secret /etc/openvpn/ta.key
 	fi
-	# Generate server.conf
-	echo "port $PORT
-proto udp
+	# Generate server-common.conf
+	echo "
 dev tun
 sndbuf 0
 rcvbuf 0
@@ -276,46 +290,60 @@ dh dh.pem
 tls-auth ta.key 0
 topology subnet
 server 10.8.0.0 255.255.255.0
-ifconfig-pool-persist ipp.txt" > /etc/openvpn/server.conf
-	echo 'push "redirect-gateway def1 bypass-dhcp"' >> /etc/openvpn/server.conf
+ifconfig-pool-persist ipp.txt" > /etc/openvpn/server-common.conf
+	echo 'push "redirect-gateway def1 bypass-dhcp"' >> /etc/openvpn/server-common.conf
 	# DNS
 	case $DNS in
 		1)
 		# Obtain the resolvers from resolv.conf and use them for OpenVPN
 		grep -v '#' /etc/resolv.conf | grep 'nameserver' | grep -E -o '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | while read line; do
-			echo "push \"dhcp-option DNS $line\"" >> /etc/openvpn/server.conf
+			echo "push \"dhcp-option DNS $line\"" >> /etc/openvpn/server-common.conf
 		done
 		;;
 		2)
-		echo 'push "dhcp-option DNS 8.8.8.8"' >> /etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 8.8.4.4"' >> /etc/openvpn/server.conf
+		echo 'push "dhcp-option DNS 8.8.8.8"' >> /etc/openvpn/server-common.conf
+		echo 'push "dhcp-option DNS 8.8.4.4"' >> /etc/openvpn/server-common.conf
 		;;
 		3)
-		echo 'push "dhcp-option DNS 208.67.222.222"' >> /etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 208.67.220.220"' >> /etc/openvpn/server.conf
+		echo 'push "dhcp-option DNS 208.67.222.222"' >> /etc/openvpn/server-common.conf
+		echo 'push "dhcp-option DNS 208.67.220.220"' >> /etc/openvpn/server-common.conf
 		;;
 		4)
-		echo 'push "dhcp-option DNS 129.250.35.250"' >> /etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 129.250.35.251"' >> /etc/openvpn/server.conf
+		echo 'push "dhcp-option DNS 129.250.35.250"' >> /etc/openvpn/server-common.conf
+		echo 'push "dhcp-option DNS 129.250.35.251"' >> /etc/openvpn/server-common.conf
 		;;
 		5)
-		echo 'push "dhcp-option DNS 74.82.42.42"' >> /etc/openvpn/server.conf
+		echo 'push "dhcp-option DNS 74.82.42.42"' >> /etc/openvpn/server-common.conf
 		;;
 		6)
-		echo 'push "dhcp-option DNS 64.6.64.6"' >> /etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 64.6.65.6"' >> /etc/openvpn/server.conf
+		echo 'push "dhcp-option DNS 64.6.64.6"' >> /etc/openvpn/server-common.conf
+		echo 'push "dhcp-option DNS 64.6.65.6"' >> /etc/openvpn/server-common.conf
 		;;
 	esac
 	echo "keepalive 10 120
 cipher AES-256-CBC
 comp-lzo
-user nobody
-group $GROUPNAME
 persist-key
 persist-tun
-status openvpn-status.log
 verb 3
-crl-verify crl.pem" >> /etc/openvpn/server.conf
+crl-verify crl.pem" >> /etc/openvpn/server-common.conf
+	echo "port $PORT
+proto udp
+status openvpn-status.log
+user nobody
+group $GROUPNAME" > /etc/openvpn/server.conf
+	cat /etc/openvpn/server-common.conf >> /etc/openvpn/server.conf
+	if [[ ! -z $PORT_TCP ]]; then
+		echo "port $PORT_TCP
+proto tcp
+status openvpn-status-tcp.log" > /etc/openvpn/server-tcp.conf
+		if [[ $PORT_TCP -gt 1000 ]]; then
+			echo "user nobody
+group $GROUPNAME" > /etc/openvpn/server-tcp.conf
+		fi
+		cat /etc/openvpn/server-common.conf >> /etc/openvpn/server-tcp.conf
+	fi
+	rm /etc/openvpn/server-common.conf
 	# Enable net.ipv4.ip_forward for the system
 	sed -i '/\<net.ipv4.ip_forward\>/c\net.ipv4.ip_forward=1' /etc/sysctl.conf
 	if ! grep -q "\<net.ipv4.ip_forward\>" /etc/sysctl.conf; then
@@ -326,24 +354,34 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 	# Set NAT for the VPN subnet
 	iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -j SNAT --to $IP
 	sed -i "1 a\iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -j SNAT --to $IP" $RCLOCAL
+	[[ ! -z "$PORT_TCP" ]] && iptables -t nat -A POSTROUTING -s 10.9.0.0/24 -j SNAT --to $IP
+	[[ ! -z "$PORT_TCP" ]] && sed -i "1 a\iptables -t nat -A POSTROUTING -s 10.9.0.0/24 -j SNAT --to $IP" $RCLOCAL
 	if pgrep firewalld; then
 		# We don't use --add-service=openvpn because that would only work with
 		# the default port. Using both permanent and not permanent rules to
 		# avoid a firewalld reload.
 		firewall-cmd --zone=public --add-port=$PORT/udp
 		firewall-cmd --zone=trusted --add-source=10.8.0.0/24
+		[[ ! -z "$PORT_TCP" ]] && firewall-cmd --zone=public --add-port=$PORT_TCP/tcp
+		[[ ! -z "$PORT_TCP" ]] && firewall-cmd --zone=trusted --add-source=10.9.0.0/24
 		firewall-cmd --permanent --zone=public --add-port=$PORT/udp
 		firewall-cmd --permanent --zone=trusted --add-source=10.8.0.0/24
+		[[ ! -z "$PORT_TCP" ]] && firewall-cmd --permanent --zone=public --add-port=$PORT_TCP/tcp
+		[[ ! -z "$PORT_TCP" ]] && firewall-cmd --permanent --zone=trusted --add-source=10.9.0.0/24
 	fi
 	if iptables -L -n | grep -qE 'REJECT|DROP'; then
 		# If iptables has at least one REJECT rule, we asume this is needed.
 		# Not the best approach but I can't think of other and this shouldn't
 		# cause problems.
 		iptables -I INPUT -p udp --dport $PORT -j ACCEPT
+		[[ ! -z "$PORT_TCP" ]] && iptables -I INPUT -p tcp --dport $PORT_TCP -j ACCEPT
 		iptables -I FORWARD -s 10.8.0.0/24 -j ACCEPT
+		[[ ! -z "$PORT_TCP" ]] && iptables -I FORWARD -s 10.9.0.0/24 -j ACCEPT
 		iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 		sed -i "1 a\iptables -I INPUT -p udp --dport $PORT -j ACCEPT" $RCLOCAL
+		[[ ! -z "$PORT_TCP" ]] && sed -i "1 a\iptables -I INPUT -p tcp --dport $PORT_TCP -j ACCEPT" $RCLOCAL
 		sed -i "1 a\iptables -I FORWARD -s 10.8.0.0/24 -j ACCEPT" $RCLOCAL
+		[[ ! -z "$PORT_TCP" ]] && sed -i "1 a\iptables -I FORWARD -s 10.9.0.0/24 -j ACCEPT" $RCLOCAL
 		sed -i "1 a\iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" $RCLOCAL
 	fi
 	# If SELinux is enabled and a custom port was selected, we need this
@@ -355,6 +393,13 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 					yum install policycoreutils-python -y
 				fi
 				semanage port -a -t openvpn_port_t -p udp $PORT
+			fi
+			if [[ ! -z "$PORT_TCP" ]]; then
+				# semanage isn't available in CentOS 6 by default
+				if ! hash semanage 2>/dev/null; then
+					yum install policycoreutils-python -y
+				fi
+				semanage port -a -t openvpn_port_t -p tcp $PORT_TCP
 			fi
 		fi
 	fi
@@ -391,15 +436,16 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 	# openvpn-install.conf is used to rebuild the server with the same pki and options.
 	# IP is purposely not saved because the restored server would have a new IP address.
 	echo "PORT=$PORT
+PORT_TCP=$PORT_TCP
 DNS=$DNS
 SERVER_HOSTNAME=$SERVER_HOSTNAME" > /etc/openvpn/openvpn-install.conf
 	# client-common.txt is created so we have a template to add further users later
 	echo "client
 dev tun
-proto udp
 sndbuf 0
 rcvbuf 0
-remote $SERVER_HOSTNAME $PORT
+remote $SERVER_HOSTNAME $PORT udp
+remote $SERVER_HOSTNAME $PORT_TCP tcp-client
 resolv-retry infinite
 nobind
 persist-key
@@ -412,10 +458,11 @@ key-direction 1
 verb 3" > /etc/openvpn/client-common.txt
 	echo ""
 	echo "Finished!"
-	if [[ $HAS_BACKUP = '1' ]]; then
+	if [[ $HAS_CONFIG_DIR = '1' ]]; then
 		echo ""
-		echo "Your server has been restored from the backup directory."
-	else
+		echo "Your server has been restored/reconstructed from the specified directory."
+	fi
+	if [[ ! -z "$CLIENT" ]]; then
 		# Generates the custom client.ovpn
 		newclient "$CLIENT"
 		echo ""

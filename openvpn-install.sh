@@ -191,12 +191,12 @@ else
 	echo ""
 
 	HAS_CONFIG_DIR=
-	if ([[ -d "$OVPN_INSTALL_CONFIG_DIR" ]] && [[ -f "$OVPN_INSTALL_CONFIG_DIR"/openvpn-install.conf ]]); then
+	if ([[ -d "$OVPN_INSTALL_CONFIG_DIR" ]] && [[ -f "$OVPN_INSTALL_CONFIG_DIR"/config.install ]]); then
 		echo "I will attempt to restore openvpn configuration stored in"
 		echo "$OVPN_INSTALL_CONFIG_DIR, as you've asked me to."
 		echo ""
 
-		source $OVPN_INSTALL_CONFIG_DIR/openvpn-install.conf
+		source $OVPN_INSTALL_CONFIG_DIR/config.install
 		HAS_CONFIG_DIR=1
 	fi
 
@@ -433,12 +433,12 @@ group $GROUPNAME" > /etc/openvpn/server-tcp.conf
 			IP=$USEREXTERNALIP
 		fi
 	fi
-	# openvpn-install.conf is used to rebuild the server with the same pki and options.
+	# config.install is used to rebuild the server with the same pki and options.
 	# IP is purposely not saved because the restored server would have a new IP address.
 	echo "PORT=$PORT
 PORT_TCP=$PORT_TCP
 DNS=$DNS
-SERVER_HOSTNAME=$SERVER_HOSTNAME" > /etc/openvpn/openvpn-install.conf
+SERVER_HOSTNAME=$SERVER_HOSTNAME" > /etc/openvpn/config.install
 	# client-common.txt is created so we have a template to add further users later
 	echo "client
 dev tun

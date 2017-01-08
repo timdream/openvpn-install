@@ -289,7 +289,6 @@ key server.key
 dh dh.pem
 tls-auth ta.key 0
 topology subnet
-server 10.8.0.0 255.255.255.0
 ifconfig-pool-persist ipp.txt" > /etc/openvpn/server-common.conf
 	echo 'push "redirect-gateway def1 bypass-dhcp"' >> /etc/openvpn/server-common.conf
 	# DNS
@@ -330,13 +329,15 @@ crl-verify crl.pem" >> /etc/openvpn/server-common.conf
 	echo "port $PORT
 proto udp
 status openvpn-status.log
+server 10.8.0.0 255.255.255.0
 user nobody
 group $GROUPNAME" > /etc/openvpn/server.conf
 	cat /etc/openvpn/server-common.conf >> /etc/openvpn/server.conf
 	if [[ ! -z $PORT_TCP ]]; then
 		echo "port $PORT_TCP
 proto tcp
-status openvpn-status-tcp.log" > /etc/openvpn/server-tcp.conf
+status openvpn-status-tcp.log
+server 10.9.0.0 255.255.255.0" > /etc/openvpn/server-tcp.conf
 		if [[ $PORT_TCP -gt 1000 ]]; then
 			echo "user nobody
 group $GROUPNAME" > /etc/openvpn/server-tcp.conf
